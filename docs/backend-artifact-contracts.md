@@ -84,7 +84,7 @@ Metagraphed v1 is backend-first. The public contract is static JSON under `https
 - `/metagraph/subnets/{netuid}/neurons/{uid}.json`: schema for a single neuron's metagraph state served live from the `neurons` D1 tier at `GET /api/v1/subnets/{netuid}/neurons/{uid}` (no static file).
 - `/metagraph/subnets/{netuid}/validators.json`: schema for a subnet's validators (validator_permit) ranked by stake, served live from the `neurons` D1 tier at `GET /api/v1/subnets/{netuid}/validators` (no static file).
 - `/metagraph/incidents.json`: schema for recent cross-subnet downtime incidents reconstructed from probe history, served live from D1 at `GET /api/v1/incidents` (no static file).
-- `/metagraph/registry/leaderboards.json`: schema for the registry leaderboards served live from D1 + registry projections at `GET /api/v1/registry/leaderboards` (no static file).
+- `/metagraph/registry/leaderboards.json`: schema for the registry leaderboards — operational (healthiest, fastest-rpc, most-complete, most-enriched, fastest-growing) and economic opportunity (open-slots, cheapest-registration, highest-emission, validator-headroom) — served live from D1 + registry projections + the economics tier at `GET /api/v1/registry/leaderboards` (no static file).
 - `/metagraph/rpc/usage.json`: schema for RPC reverse-proxy usage analytics (request volume, latency p50/p95, failover + error rate, cache-hit rate, per-endpoint distribution, and bounded time buckets), served live from the `rpc_proxy_events` D1 telemetry at `GET /api/v1/rpc/usage` (no static file). `7d` uses 1-hour buckets; `30d` uses 6-hour buckets.
 - `/metagraph/schema-drift.json`: OpenAPI snapshot/drift status.
 - `/metagraph/schemas/index.json`: captured machine-readable schema index.
@@ -124,7 +124,7 @@ Metagraphed v1 is backend-first. The public contract is static JSON under `https
 - `/api/v1/subnets/{netuid}/metagraph`: fetch the per-UID metagraph (stake, trust, consensus, incentive, dividends, emission, validator_permit, rank, axon); `?validator_permit=true` for validators only (live from the `neurons` D1 tier).
 - `/api/v1/subnets/{netuid}/neurons/{uid}`: fetch a single neuron's metagraph state by UID (live from the `neurons` D1 tier; 200 with `neuron:null` when cold/absent).
 - `/api/v1/subnets/{netuid}/validators`: fetch the validators (validator_permit) ranked by stake (live from the `neurons` D1 tier).
-- `/api/v1/registry/leaderboards`: fetch registry leaderboards (`board=healthiest|fastest-rpc|most-complete|fastest-growing`, or omit for all).
+- `/api/v1/registry/leaderboards`: fetch registry leaderboards (`board=healthiest|fastest-rpc|most-complete|most-enriched|fastest-growing|open-slots|cheapest-registration|highest-emission|validator-headroom`, or omit for all). The four economic boards rank cross-subnet miner/validator opportunity from the economics tier; pairs with the `find_subnet_opportunities` MCP tool.
 - `/api/v1/rpc/usage`: fetch RPC reverse-proxy usage analytics (request volume, latency p50/p95, failover + error rate, cache-hit rate, per-endpoint distribution, and bounded time buckets) over a 7d/30d window (live from the `rpc_proxy_events` D1 telemetry). `7d` uses 1-hour buckets; `30d` uses 6-hour buckets.
 - `/api/v1/surfaces`: list curated public surfaces.
 - `/api/v1/subnets/{netuid}/surfaces`: list curated public surfaces for one subnet.
