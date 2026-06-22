@@ -2449,3 +2449,55 @@ describe("search tools pagination", () => {
     });
   }
 });
+
+// Optional fields are absent on some real subnets, so the result mappers fall
+// back: search subtitle -> null, and capability categories/service_kinds -> [],
+// integration_readiness -> null. Exercise those fallback branches directly.
+describe("search tools — absent optional fields fall back", () => {
+  const deps = makeDeps({
+    // A matching search doc with no subtitle.
+    "/metagraph/search.json": {
+      documents: [
+        {
+          type: "subnet",
+          netuid: 5,
+          slug: "sparse",
+          title: "Sparse",
+          tokens: ["sparse"],
+        },
+      ],
+    },
+    // A matching catalog subnet (matched via name/slug) with no categories,
+    // service_kinds, or integration_readiness.
+    "/metagraph/agent-catalog.json": {
+      subnets: [
+        { netuid: 9, slug: "sparsecap", name: "Sparsecap", callable_count: 3 },
+      ],
+    },
+  });
+
+  test("search_subnets maps a missing subtitle to description: null", async () => {
+    const out = (
+      await callTool("search_subnets", { query: "sparse" }, { deps })
+    ).body.result.structuredContent;
+    assert.equal(out.results.length, 1);
+    assert.equal(out.results[0].netuid, 5);
+    assert.equal(out.results[0].description, null);
+  });
+
+  test("find_subnets_by_capability defaults absent categories/service_kinds/readiness", async () => {
+    const out = (
+      await callTool(
+        "find_subnets_by_capability",
+        { capability: "sparsecap" },
+        { deps },
+      )
+    ).body.result.structuredContent;
+    assert.equal(out.results.length, 1);
+    const [match] = out.results;
+    assert.equal(match.netuid, 9);
+    assert.deepEqual(match.categories, []);
+    assert.deepEqual(match.service_kinds, []);
+    assert.equal(match.integration_readiness, null);
+  });
+});
