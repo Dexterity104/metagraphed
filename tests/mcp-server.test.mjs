@@ -1270,6 +1270,38 @@ describe("MCP tools (injected deps)", () => {
     assert.equal(res.body.result.isError, true);
     assert.match(res.body.result.content[0].text, /No resource/);
   });
+
+  test("find_subnet_opportunities tolerates an economics artifact with no subnets", async () => {
+    // No subnets array -> empty boards; observed_at falls back to generated_at.
+    let res = await callTool(
+      "find_subnet_opportunities",
+      {},
+      {
+        deps: makeDeps({
+          "/metagraph/economics.json": { generated_at: "2026-06-19T00:00:00Z" },
+        }),
+      },
+    );
+    let out = res.body.result.structuredContent;
+    assert.equal(out.with_economics_count, 0);
+    assert.equal(out.observed_at, "2026-06-19T00:00:00Z");
+    for (const key of [
+      "open-slots",
+      "cheapest-registration",
+      "highest-emission",
+      "validator-headroom",
+    ]) {
+      assert.deepEqual(out.boards[key], []);
+    }
+
+    // Neither captured_at nor generated_at -> observed_at is null.
+    res = await callTool(
+      "find_subnet_opportunities",
+      {},
+      { deps: makeDeps({ "/metagraph/economics.json": {} }) },
+    );
+    assert.equal(res.body.result.structuredContent.observed_at, null);
+  });
 });
 
 describe("MCP edge cases", () => {

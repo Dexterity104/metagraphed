@@ -9,6 +9,7 @@ import {
 } from "../src/health-serving.mjs";
 import { writeSubnetSnapshot } from "../src/health-prober.mjs";
 import { handleRequest, handleScheduled } from "../workers/api.mjs";
+import { CONTRACT_VERSION } from "../src/contracts.mjs";
 import { createLocalArtifactEnv } from "../scripts/lib.mjs";
 
 // --- Pure format helpers ----------------------------------------------------
@@ -337,6 +338,116 @@ describe("formatLeaderboards", () => {
     assert.deepEqual(Object.keys(out.boards), ["highest-emission"]);
     assert.equal(out.boards["highest-emission"].length, 1);
     assert.equal(out.boards["highest-emission"][0].netuid, 11);
+  });
+
+  test("economic boards break metric ties by tiebreak then netuid, nulls last", () => {
+    const ranked = (board, rows) =>
+      formatLeaderboards({
+        ...inputs,
+        board,
+        limit: 10,
+        economicsRows: rows,
+      }).boards[board].map((entry) => entry.netuid);
+
+    // open-slots all tie at 100: cheaper cost first, equal cost breaks on netuid,
+    // unknown cost (Infinity) ranks last. netuid 2 is in subnetMeta, so its
+    // identity resolves from the map rather than the row.
+    const openSlots = formatLeaderboards({
+      ...inputs,
+      board: "open-slots",
+      limit: 10,
+      economicsRows: [
+        {
+          netuid: 30,
+          open_slots: 100,
+          registration_cost_tao: 5,
+          registration_allowed: true,
+        },
+        {
+          netuid: 2,
+          open_slots: 100,
+          registration_cost_tao: 5,
+          registration_allowed: true,
+        },
+        {
+          netuid: 31,
+          open_slots: 100,
+          registration_cost_tao: null,
+          registration_allowed: true,
+        },
+        {
+          netuid: 32,
+          open_slots: 100,
+          registration_cost_tao: 1,
+          registration_allowed: true,
+        },
+      ],
+    }).boards["open-slots"];
+    assert.deepEqual(
+      openSlots.map((e) => e.netuid),
+      [32, 2, 30, 31],
+    );
+    assert.equal(openSlots.find((e) => e.netuid === 2).name, "Two");
+
+    // cheapest-registration tie at cost 2: more open slots first, unknown last.
+    assert.deepEqual(
+      ranked("cheapest-registration", [
+        {
+          netuid: 30,
+          registration_cost_tao: 2,
+          registration_allowed: true,
+          open_slots: 10,
+        },
+        {
+          netuid: 31,
+          registration_cost_tao: 2,
+          registration_allowed: true,
+          open_slots: null,
+        },
+        {
+          netuid: 32,
+          registration_cost_tao: 2,
+          registration_allowed: true,
+          open_slots: 99,
+        },
+      ]),
+      [32, 30, 31],
+    );
+
+    // highest-emission tie at 0.2: higher stake first, unknown last.
+    assert.deepEqual(
+      ranked("highest-emission", [
+        { netuid: 30, emission_share: 0.2, total_stake_tao: 100 },
+        { netuid: 31, emission_share: 0.2, total_stake_tao: null },
+        { netuid: 32, emission_share: 0.2, total_stake_tao: 999 },
+      ]),
+      [32, 30, 31],
+    );
+
+    // validator-headroom tie at 10: higher emission first, unknown last.
+    assert.deepEqual(
+      ranked("validator-headroom", [
+        {
+          netuid: 30,
+          max_validators: 20,
+          validator_count: 10,
+          emission_share: 0.1,
+        },
+        {
+          netuid: 31,
+          max_validators: 30,
+          validator_count: 20,
+          emission_share: null,
+        },
+        {
+          netuid: 32,
+          max_validators: 15,
+          validator_count: 5,
+          emission_share: 0.5,
+        },
+      ]),
+      [32, 30, 31],
+    );
   });
 });
 
@@ -691,6 +802,43 @@ describe("analytics routes (cold local D1)", () => {
     );
     assert.deepEqual(Object.keys(body.data.boards), ["highest-emission"]);
     assert.ok(body.data.boards["highest-emission"].length <= 5);
+  });
+  test("leaderboards economic boards prefer the live economics KV blob", async () => {
+    // A fresh, on-contract, integrity-valid blob makes resolveLiveEconomics win,
+    // so the boards project from KV rather than the committed R2 economics.json.
+    const liveEnv = {
+      ...env,
+      METAGRAPH_CONTROL: {
+        async get(key) {
+          if (key !== "economics:current") return null;
+          return {
+            schema_version: 1,
+            contract_version: CONTRACT_VERSION,
+            captured_at: new Date(Date.now() - 60_000).toISOString(),
+            summary: { with_economics_count: 1 },
+            subnets: [
+              {
+                netuid: 777,
+                slug: "live",
+                name: "Live",
+                open_slots: 5,
+                registration_cost_tao: 1,
+                registration_allowed: true,
+                emission_share: 1,
+              },
+            ],
+          };
+        },
+      },
+    };
+    const { body } = await getJson(
+      "https://api.metagraph.sh/api/v1/registry/leaderboards?board=open-slots",
+      liveEnv,
+    );
+    assert.deepEqual(
+      body.data.boards["open-slots"].map((e) => e.netuid),
+      [777],
+    );
   });
   test("leaderboards rejects an unknown board", async () => {
     const { status, body } = await getJson(
