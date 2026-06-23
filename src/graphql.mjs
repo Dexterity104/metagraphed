@@ -619,6 +619,12 @@ async function listPage(
   };
 }
 
+// readArtifact's static-asset tier resolves the path through a URL parser that
+// collapses "../", so an unvalidated provider id could escape the providers/
+// namespace. Constrain it to the safe slug charset the other id-bearing artifact
+// paths use; subnet(netuid) is Int-typed and needs no guard.
+const VALID_PROVIDER_ID = /^[A-Za-z0-9._:-]+$/;
+
 const rootValue = {
   subnets({ limit, cursor }, context) {
     return listPage(context, ARTIFACT.subnets, "subnets", {
@@ -655,6 +661,7 @@ const rootValue = {
   },
 
   async provider({ id }, context) {
+    if (typeof id !== "string" || !VALID_PROVIDER_ID.test(id)) return null;
     const data = await loadArtifact(context, `/metagraph/providers/${id}.json`);
     if (!data) return null;
     return providerNode(data.provider ?? data);
