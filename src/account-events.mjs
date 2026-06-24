@@ -3,6 +3,7 @@
 // (substrate System.Events), NOT Taostats. This module holds the load contract,
 // the daily rollup + prune (retention), and the row→API shaping (#1347). Pure +
 // exported for tests; the Worker runs the D1 I/O.
+import { clampInt } from "../workers/config.mjs";
 
 // Hot window for raw events; rolled into account_events_daily before prune so
 // long-term per-entity history survives (mirrors the 30d surface_checks window).
@@ -251,16 +252,6 @@ export function buildAccountSubnets(rows, ss58) {
 // hotkey-only (a coldkey is not itself a neuron).
 const ACCOUNT_EVENT_MATCH = "hotkey = ? OR coldkey = ?";
 const REGISTRATION_COLUMNS = "netuid, uid, stake_tao, validator_permit, active";
-
-// Clamp a raw limit/offset (REST query string or MCP tool-arg number) into
-// [min, max], falling back to `def` when absent/blank/non-finite — the real
-// guard, since tools/call does not enforce inputSchema bounds.
-export function clampInt(raw, def, min, max) {
-  if (raw == null || raw === "") return def;
-  const n = Number(raw);
-  if (!Number.isFinite(n)) return def;
-  return Math.max(min, Math.min(max, Math.trunc(n)));
-}
 
 // Cross-subnet summary: event aggregates + per-kind counts + the 10 newest events
 // (account_events, by hotkey or coldkey) and current registrations (neurons).
