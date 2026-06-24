@@ -116,10 +116,9 @@ import {
   MAX_HISTORY_POINTS,
 } from "../src/neuron-history.mjs";
 import {
-  ACCOUNT_EVENT_COLUMNS,
-  buildAccountEvents,
-  buildAccountSubnets,
-  buildAccountSummary,
+  loadAccountSummary,
+  loadAccountEvents,
+  loadAccountSubnets,
   eventInsertStatements,
   rollupAccountEventsDaily,
   pruneAccountEvents,
@@ -2805,14 +2804,9 @@ async function handleSubnetHistory(request, env, netuid, url) {
   );
 }
 
-// ---- Account entity handlers (#1347) ---------------------------------------
-function clampInt(raw, def, min, max) {
-  if (raw == null || raw === "") return def;
-  const n = Number(raw);
-  if (!Number.isFinite(n)) return def;
-  return Math.max(min, Math.min(max, Math.trunc(n)));
-}
-
+// ---- Account entity handlers -----------------------------------------------
+// SQL + pagination live in src/account-events.mjs (loadAccount*), shared with the
+// MCP account tools; these handlers add only the REST envelope + meta.
 async function accountMeta(env, artifactPath, generatedAt) {
   return {
     artifact_path: artifactPath,
@@ -2828,35 +2822,7 @@ async function accountMeta(env, artifactPath, generatedAt) {
 // (account_events, matched by hotkey OR coldkey) joined to current registrations
 // (neurons, by hotkey). Cold/absent store → schema-stable zero (never 404).
 async function handleAccount(request, env, ss58) {
-  const where = "hotkey = ? OR coldkey = ?";
-  const [aggRows, kindRows, regRows, recentRows] = await Promise.all([
-    d1All(
-      env,
-      `SELECT COUNT(*) AS c, COUNT(DISTINCT netuid) AS sc, MIN(block_number) AS fb, MAX(block_number) AS lb, MIN(observed_at) AS fo, MAX(observed_at) AS lo FROM account_events WHERE ${where}`,
-      [ss58, ss58],
-    ),
-    d1All(
-      env,
-      `SELECT event_kind AS kind, COUNT(*) AS count FROM account_events WHERE ${where} GROUP BY event_kind ORDER BY count DESC`,
-      [ss58, ss58],
-    ),
-    d1All(
-      env,
-      `SELECT netuid, uid, stake_tao, validator_permit, active FROM neurons WHERE hotkey = ? ORDER BY stake_tao DESC`,
-      [ss58],
-    ),
-    d1All(
-      env,
-      `SELECT ${ACCOUNT_EVENT_COLUMNS} FROM account_events WHERE ${where} ORDER BY block_number DESC, event_index DESC LIMIT 10`,
-      [ss58, ss58],
-    ),
-  ]);
-  const data = buildAccountSummary(ss58, {
-    agg: aggRows[0],
-    kinds: kindRows,
-    registrations: regRows,
-    recent: recentRows,
-  });
+  const data = await loadAccountSummary(d1Runner(env), ss58);
   return envelopeResponse(
     request,
     {
@@ -2876,19 +2842,11 @@ async function handleAccount(request, env, ss58) {
 async function handleAccountEvents(request, env, ss58, url) {
   const validationError = validateQueryParams(url, ["kind", "limit", "offset"]);
   if (validationError) return analyticsQueryError(validationError);
-  const limit = clampInt(url.searchParams.get("limit"), 100, 1, 1000);
-  const offset = clampInt(url.searchParams.get("offset"), 0, 0, 1_000_000);
-  const kind = url.searchParams.get("kind");
-  const params = [ss58, ss58];
-  let sql = `SELECT ${ACCOUNT_EVENT_COLUMNS} FROM account_events WHERE (hotkey = ? OR coldkey = ?)`;
-  if (kind) {
-    sql += " AND event_kind = ?";
-    params.push(kind);
-  }
-  sql += " ORDER BY block_number DESC, event_index DESC LIMIT ? OFFSET ?";
-  params.push(limit, offset);
-  const rows = await d1All(env, sql, params);
-  const data = buildAccountEvents(rows, ss58, { limit, offset });
+  const data = await loadAccountEvents(d1Runner(env), ss58, {
+    limit: url.searchParams.get("limit"),
+    offset: url.searchParams.get("offset"),
+    kind: url.searchParams.get("kind"),
+  });
   return envelopeResponse(
     request,
     {
@@ -2906,12 +2864,7 @@ async function handleAccountEvents(request, env, ss58, url) {
 // GET /api/v1/accounts/{ss58}/subnets: the subnets where this hotkey is currently
 // registered (the cross-subnet footprint), from the neurons tier.
 async function handleAccountSubnets(request, env, ss58) {
-  const rows = await d1All(
-    env,
-    `SELECT netuid, uid, stake_tao, validator_permit, active FROM neurons WHERE hotkey = ? ORDER BY netuid`,
-    [ss58],
-  );
-  const data = buildAccountSubnets(rows, ss58);
+  const data = await loadAccountSubnets(d1Runner(env), ss58);
   return envelopeResponse(
     request,
     {

@@ -241,3 +241,83 @@ export function buildAccountSubnets(rows, ss58) {
     subnets,
   };
 }
+
+// ---- Account D1 read paths ------------------------------------------------
+// One source of truth for the account SQL + pagination, shared by the REST
+// handlers and the MCP tools. `d1` is a (sql, params) => Promise<rows[]> runner;
+// a cold/unbound DB yields [] → a schema-stable zero payload (never a 404).
+
+// Events match either key (a coldkey controls hotkeys); a registration is
+// hotkey-only (a coldkey is not itself a neuron).
+const ACCOUNT_EVENT_MATCH = "hotkey = ? OR coldkey = ?";
+const REGISTRATION_COLUMNS = "netuid, uid, stake_tao, validator_permit, active";
+
+// Clamp a raw limit/offset (REST query string or MCP tool-arg number) into
+// [min, max], falling back to `def` when absent/blank/non-finite — the real
+// guard, since tools/call does not enforce inputSchema bounds.
+export function clampInt(raw, def, min, max) {
+  if (raw == null || raw === "") return def;
+  const n = Number(raw);
+  if (!Number.isFinite(n)) return def;
+  return Math.max(min, Math.min(max, Math.trunc(n)));
+}
+
+// Cross-subnet summary: event aggregates + per-kind counts + the 10 newest events
+// (account_events, by hotkey or coldkey) and current registrations (neurons).
+export async function loadAccountSummary(d1, ss58) {
+  const [aggRows, kindRows, regRows, recentRows] = await Promise.all([
+    d1(
+      `SELECT COUNT(*) AS c, COUNT(DISTINCT netuid) AS sc, MIN(block_number) AS fb, MAX(block_number) AS lb, MIN(observed_at) AS fo, MAX(observed_at) AS lo FROM account_events WHERE ${ACCOUNT_EVENT_MATCH}`,
+      [ss58, ss58],
+    ),
+    d1(
+      `SELECT event_kind AS kind, COUNT(*) AS count FROM account_events WHERE ${ACCOUNT_EVENT_MATCH} GROUP BY event_kind ORDER BY count DESC`,
+      [ss58, ss58],
+    ),
+    d1(
+      `SELECT ${REGISTRATION_COLUMNS} FROM neurons WHERE hotkey = ? ORDER BY stake_tao DESC`,
+      [ss58],
+    ),
+    d1(
+      `SELECT ${ACCOUNT_EVENT_COLUMNS} FROM account_events WHERE ${ACCOUNT_EVENT_MATCH} ORDER BY block_number DESC, event_index DESC LIMIT 10`,
+      [ss58, ss58],
+    ),
+  ]);
+  return buildAccountSummary(ss58, {
+    agg: aggRows[0],
+    kinds: kindRows,
+    registrations: regRows,
+    recent: recentRows,
+  });
+}
+
+// Paginated chain-event history (newest first), optional event-kind filter,
+// limit (<=1000) / offset. Clamps internally so REST and MCP agree.
+export async function loadAccountEvents(
+  d1,
+  ss58,
+  { limit, offset, kind } = {},
+) {
+  const lim = clampInt(limit, 100, 1, 1000);
+  const off = clampInt(offset, 0, 0, 1_000_000);
+  const params = [ss58, ss58];
+  let sql = `SELECT ${ACCOUNT_EVENT_COLUMNS} FROM account_events WHERE (${ACCOUNT_EVENT_MATCH})`;
+  if (kind) {
+    sql += " AND event_kind = ?";
+    params.push(kind);
+  }
+  sql += " ORDER BY block_number DESC, event_index DESC LIMIT ? OFFSET ?";
+  params.push(lim, off);
+  const rows = await d1(sql, params);
+  return buildAccountEvents(rows, ss58, { limit: lim, offset: off });
+}
+
+// The subnets where this account's hotkey is currently registered — the
+// cross-subnet footprint, ordered by netuid.
+export async function loadAccountSubnets(d1, ss58) {
+  const rows = await d1(
+    `SELECT ${REGISTRATION_COLUMNS} FROM neurons WHERE hotkey = ? ORDER BY netuid`,
+    [ss58],
+  );
+  return buildAccountSubnets(rows, ss58);
+}
