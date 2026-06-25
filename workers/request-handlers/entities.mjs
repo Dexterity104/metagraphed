@@ -519,25 +519,65 @@ export async function handleBlockExtrinsics(request, env, ref, url) {
 
 // GET /api/v1/extrinsics: the recent-extrinsic feed (newest first), served live
 // from the `extrinsics` D1 tier (#1345 block explorer). ?limit clamp <=100,
-// ?offset, optional ?block=<n> to scope to one block. Cold/absent store →
-// schema-stable zero (never throws). Reuses the chain-events meta
-// (source:"chain-events") since the same first-party poller fills this tier.
+// ?offset, and a conjunctive (AND-ed) filter set (#1846): ?block=<n>, ?signer=,
+// ?call_module=, ?call_function=, ?success=true|false, ?block_start/?block_end
+// (block range), ?from/?to (observed_at epoch-ms range). All optional; an inverted
+// range simply matches nothing (never throws). Cold/absent store → schema-stable
+// zero. Reuses the chain-events meta since the same first-party poller fills this
+// tier. The per-row shape is bound, never interpolated.
 export async function handleExtrinsics(request, env, url) {
   const validationError = validateQueryParams(url, [
     "limit",
     "offset",
     "block",
+    "signer",
+    "call_module",
+    "call_function",
+    "success",
+    "block_start",
+    "block_end",
+    "from",
+    "to",
   ]);
   if (validationError) return analyticsQueryError(validationError);
   const limit = clampInt(url.searchParams.get("limit"), 50, 1, 100);
   const offset = clampInt(url.searchParams.get("offset"), 0, 0, 1_000_000);
-  const blockParam = url.searchParams.get("block");
-  let sql = `SELECT ${EXTRINSIC_READ_COLUMNS} FROM extrinsics`;
+  const sp = url.searchParams;
+  const MAX = Number.MAX_SAFE_INTEGER;
+  const conds = [];
   const params = [];
-  if (blockParam != null) {
-    sql += " WHERE block_number = ?";
-    params.push(clampInt(blockParam, 0, 0, Number.MAX_SAFE_INTEGER));
+  const eq = (col, val) => {
+    conds.push(`${col} = ?`);
+    params.push(val);
+  };
+  if (sp.get("block") != null)
+    eq("block_number", clampInt(sp.get("block"), 0, 0, MAX));
+  if (sp.get("signer")) eq("signer", sp.get("signer"));
+  if (sp.get("call_module")) eq("call_module", sp.get("call_module"));
+  if (sp.get("call_function")) eq("call_function", sp.get("call_function"));
+  // success is stored 1/0/NULL; bind the literal so success=false never leaks
+  // NULL (undeterminable) rows. Any non-true/false value is ignored.
+  const successRaw = sp.get("success");
+  if (successRaw === "true") eq("success", 1);
+  else if (successRaw === "false") eq("success", 0);
+  if (sp.get("block_start") != null) {
+    conds.push("block_number >= ?");
+    params.push(clampInt(sp.get("block_start"), 0, 0, MAX));
   }
+  if (sp.get("block_end") != null) {
+    conds.push("block_number <= ?");
+    params.push(clampInt(sp.get("block_end"), 0, 0, MAX));
+  }
+  if (sp.get("from") != null) {
+    conds.push("observed_at >= ?");
+    params.push(clampInt(sp.get("from"), 0, 0, MAX));
+  }
+  if (sp.get("to") != null) {
+    conds.push("observed_at <= ?");
+    params.push(clampInt(sp.get("to"), 0, 0, MAX));
+  }
+  let sql = `SELECT ${EXTRINSIC_READ_COLUMNS} FROM extrinsics`;
+  if (conds.length) sql += ` WHERE ${conds.join(" AND ")}`;
   sql += " ORDER BY block_number DESC, extrinsic_index DESC LIMIT ? OFFSET ?";
   params.push(limit, offset);
   const rows = await d1All(env, sql, params);
@@ -556,24 +596,45 @@ export async function handleExtrinsics(request, env, url) {
   );
 }
 
-// GET /api/v1/extrinsics/{hash}: per-extrinsic detail (#1345). hash is a 0x
-// extrinsic_hash. Served live from the `extrinsics` D1 tier; an unknown hash /
-// cold store → 200 with extrinsic:null (schema-stable, mirrors the block detail
-// route — NEVER 404/throw).
-export async function handleExtrinsic(request, env, hash) {
-  const rows = await d1All(
-    env,
-    `SELECT ${EXTRINSIC_READ_COLUMNS} FROM extrinsics WHERE extrinsic_hash = ? ORDER BY block_number DESC, extrinsic_index DESC LIMIT 1`,
-    [hash],
-  );
-  const data = buildExtrinsic(rows[0], hash);
+// GET /api/v1/extrinsics/{ref}: per-extrinsic detail (#1345/#1848). ref is EITHER
+// a 0x extrinsic_hash OR the canonical composite id "<block_number>-<extrinsic_index>".
+// The hash is best-effort/nullable in the decoder, so the composite id is the
+// guaranteed-present identifier; the composite path does a direct (block_number,
+// extrinsic_index) PK hit. Served live from the `extrinsics` D1 tier; an unknown
+// ref / cold store / malformed composite → 200 with extrinsic:null (schema-stable,
+// mirrors handleBlock's numeric-OR-hash branch — NEVER 404/throw).
+export async function handleExtrinsic(request, env, ref) {
+  const isHash = /^0x[0-9a-fA-F]{64}$/.test(ref);
+  let rows;
+  if (isHash) {
+    rows = await d1All(
+      env,
+      `SELECT ${EXTRINSIC_READ_COLUMNS} FROM extrinsics WHERE extrinsic_hash = ? ORDER BY block_number DESC, extrinsic_index DESC LIMIT 1`,
+      [ref],
+    );
+  } else {
+    // Composite "<block>-<index>": coerce both halves; a non-finite half is a
+    // miss (extrinsic:null), never a bad bind.
+    const [b, i] = ref.split("-");
+    const blockNumber = Number(b);
+    const extrinsicIndex = Number(i);
+    rows =
+      Number.isInteger(blockNumber) && Number.isInteger(extrinsicIndex)
+        ? await d1All(
+            env,
+            `SELECT ${EXTRINSIC_READ_COLUMNS} FROM extrinsics WHERE block_number = ? AND extrinsic_index = ? LIMIT 1`,
+            [blockNumber, extrinsicIndex],
+          )
+        : [];
+  }
+  const data = buildExtrinsic(rows[0], ref);
   return envelopeResponse(
     request,
     {
       data,
       meta: await accountMeta(
         env,
-        `/metagraph/extrinsics/${hash}.json`,
+        `/metagraph/extrinsics/${ref}.json`,
         data.extrinsic?.observed_at ?? null,
       ),
     },

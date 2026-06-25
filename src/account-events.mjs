@@ -195,9 +195,27 @@ export function formatRegistration(row) {
 // matched by hotkey OR coldkey) joined to current registrations (from neurons,
 // by hotkey). `agg` is the single aggregate row; kinds/registrations/recent are
 // row arrays. Null-safe on a cold/absent store (returns a schema-stable zero).
+// Signing-activity sub-object (#1847) from the extrinsics tier, by signer. These
+// are hot-window aggregates (retention-bounded), not all-time. Matched by signer
+// only — an account queried by a key that did not sign won't line up with the
+// account_events aggregates (which match hotkey OR coldkey). Null-safe on a cold
+// store: tx_count 0, others null, modules_called [].
+export function formatAccountActivity(agg, modules) {
+  const a = agg || {};
+  return {
+    tx_count: a.tx_count ?? 0,
+    last_tx_block: a.last_tx_block ?? null,
+    last_tx_at: toIso(a.last_tx_at),
+    total_fee_tao: a.total_fee_tao ?? null,
+    modules_called: (modules || [])
+      .filter((m) => m && m.call_module)
+      .map((m) => ({ call_module: m.call_module, count: m.count ?? 0 })),
+  };
+}
+
 export function buildAccountSummary(
   ss58,
-  { agg, kinds, registrations, recent } = {},
+  { agg, kinds, registrations, recent, activity, modules } = {},
 ) {
   const a = agg || {};
   return {
@@ -216,6 +234,7 @@ export function buildAccountSummary(
       .map(formatRegistration)
       .filter(Boolean),
     recent_events: (recent || []).map(formatAccountEvent).filter(Boolean),
+    activity: formatAccountActivity(activity, modules),
   };
 }
 
@@ -254,31 +273,45 @@ const ACCOUNT_EVENT_MATCH = "hotkey = ? OR coldkey = ?";
 const REGISTRATION_COLUMNS = "netuid, uid, stake_tao, validator_permit, active";
 
 // Cross-subnet summary: event aggregates + per-kind counts + the 10 newest events
-// (account_events, by hotkey or coldkey) and current registrations (neurons).
+// (account_events, by hotkey or coldkey), current registrations (neurons), and
+// signing activity (extrinsics, by signer): tx counts, fees, and call-module mix.
 export async function loadAccountSummary(d1, ss58) {
-  const [aggRows, kindRows, regRows, recentRows] = await Promise.all([
-    d1(
-      `SELECT COUNT(*) AS c, COUNT(DISTINCT netuid) AS sc, MIN(block_number) AS fb, MAX(block_number) AS lb, MIN(observed_at) AS fo, MAX(observed_at) AS lo FROM account_events WHERE ${ACCOUNT_EVENT_MATCH}`,
-      [ss58, ss58],
-    ),
-    d1(
-      `SELECT event_kind AS kind, COUNT(*) AS count FROM account_events WHERE ${ACCOUNT_EVENT_MATCH} GROUP BY event_kind ORDER BY count DESC`,
-      [ss58, ss58],
-    ),
-    d1(
-      `SELECT ${REGISTRATION_COLUMNS} FROM neurons WHERE hotkey = ? ORDER BY stake_tao DESC`,
-      [ss58],
-    ),
-    d1(
-      `SELECT ${ACCOUNT_EVENT_COLUMNS} FROM account_events WHERE ${ACCOUNT_EVENT_MATCH} ORDER BY block_number DESC, event_index DESC LIMIT 10`,
-      [ss58, ss58],
-    ),
-  ]);
+  const [aggRows, kindRows, regRows, recentRows, activityRows, moduleRows] =
+    await Promise.all([
+      d1(
+        `SELECT COUNT(*) AS c, COUNT(DISTINCT netuid) AS sc, MIN(block_number) AS fb, MAX(block_number) AS lb, MIN(observed_at) AS fo, MAX(observed_at) AS lo FROM account_events WHERE ${ACCOUNT_EVENT_MATCH}`,
+        [ss58, ss58],
+      ),
+      d1(
+        `SELECT event_kind AS kind, COUNT(*) AS count FROM account_events WHERE ${ACCOUNT_EVENT_MATCH} GROUP BY event_kind ORDER BY count DESC`,
+        [ss58, ss58],
+      ),
+      d1(
+        `SELECT ${REGISTRATION_COLUMNS} FROM neurons WHERE hotkey = ? ORDER BY stake_tao DESC`,
+        [ss58],
+      ),
+      d1(
+        `SELECT ${ACCOUNT_EVENT_COLUMNS} FROM account_events WHERE ${ACCOUNT_EVENT_MATCH} ORDER BY block_number DESC, event_index DESC LIMIT 10`,
+        [ss58, ss58],
+      ),
+      // Signing activity (#1847): extrinsics-tier aggregates by signer
+      // (idx_extrinsics_signer), single [ss58] bind, hot-window-bounded.
+      d1(
+        `SELECT COUNT(*) AS tx_count, MAX(block_number) AS last_tx_block, MAX(observed_at) AS last_tx_at, SUM(fee_tao) AS total_fee_tao FROM extrinsics WHERE signer = ?`,
+        [ss58],
+      ),
+      d1(
+        `SELECT call_module, COUNT(*) AS count FROM extrinsics WHERE signer = ? GROUP BY call_module ORDER BY count DESC LIMIT 10`,
+        [ss58],
+      ),
+    ]);
   return buildAccountSummary(ss58, {
     agg: aggRows[0],
     kinds: kindRows,
     registrations: regRows,
     recent: recentRows,
+    activity: activityRows[0],
+    modules: moduleRows,
   });
 }
 
