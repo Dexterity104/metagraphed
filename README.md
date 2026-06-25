@@ -8,6 +8,9 @@ The Bittensor subnet integration registry. For every subnet it answers: **what d
 
 [![Website](https://img.shields.io/badge/website-metagraph.sh-111?logo=cloudflare&logoColor=white)](https://metagraph.sh)
 [![MCP](https://img.shields.io/badge/MCP-api.metagraph.sh%2Fmcp-7c3aed)](https://api.metagraph.sh/mcp)
+[![MCP Registry](https://img.shields.io/badge/MCP_Registry-listed-7c3aed)](https://registry.modelcontextprotocol.io/v0/servers?search=metagraphed)
+[![mcp.so](https://img.shields.io/badge/mcp.so-listed-f97316)](https://mcp.so/server/metagraphed---bittensor-subnet-registry/JSONbored)
+[![smithery badge](https://smithery.ai/badge/metagraphed/metagraphed)](https://smithery.ai/servers/metagraphed/metagraphed)
 [![npm](https://img.shields.io/npm/v/@jsonbored/metagraphed?logo=npm&label=npm)](https://www.npmjs.com/package/@jsonbored/metagraphed)
 [![PyPI](https://img.shields.io/pypi/v/metagraphed?logo=pypi&logoColor=white&label=PyPI)](https://pypi.org/project/metagraphed/)
 [![License: AGPL-3.0](https://img.shields.io/badge/license-AGPL--3.0-blue)](./LICENSE)
@@ -96,16 +99,16 @@ public/metagraph/  compact generated artifacts + contracts
 generated/         generated TypeScript types + client
 ```
 
-Deeper docs: [`docs/api-stability.md`](docs/api-stability.md) (the `/api/v1` contract), [`docs/submission-gate.md`](docs/submission-gate.md), [`docs/curation-playbook.md`](docs/curation-playbook.md).
+Deeper docs: [`docs/api-stability.md`](docs/api-stability.md) (the `/api/v1` contract), [`docs/curation-playbook.md`](docs/curation-playbook.md).
 
 ## Contributing
 
 Issues are labeled `good first issue` and `help wanted` — start there.
 
 - **Schema-first edits** require `npm run build` (regenerates `openapi.json` + types).
-- **Community submissions** are PR-first: touch exactly one `registry/candidates/community/*.json` file, no generated artifacts.
+- **Community submissions** are PR-first: add a surface to exactly one `registry/subnets/<slug>.json` file (via `npm run surface:add`), no generated artifacts.
 
-See [`CONTRIBUTING.md`](CONTRIBUTING.md) and [`docs/submission-gate.md`](docs/submission-gate.md).
+See [`CONTRIBUTING.md`](CONTRIBUTING.md) and [`docs/curation-playbook.md`](docs/curation-playbook.md).
 
 ## Subnet catalog
 

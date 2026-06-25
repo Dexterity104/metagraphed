@@ -50,15 +50,15 @@ jobs:
       - name: Install
         run: npm ci
 
-      # Read the durable high-water cursor (highest block previously staged) from
-      # R2 before polling. The window alone is a FIXED look-back: if the scheduler
-      # coalesces/drops runs for longer than the window, blocks older than
-      # head-window are never fetched and silently lost. The cursor closes that gap
-      # — the scan resumes from cursor+1 (capped by the window floor). A cold start
-      # (no object yet) is fine: `get` fails, we leave EVENTS_CURSOR blank, and the
-      # poller falls back to the window floor. `|| true` so a missing object (or a
-      # transient R2 blip) never fails the run; the window floor still makes the
-      # poll correct, just without long-gap recovery for this one tick.
+      # Read the high-water cursor (highest block previously staged) from R2 before
+      # polling. The poller scans `min(window-floor, cursor+1) .. head` (ADR 0012): it
+      # always re-scans the overlap window AND extends back to cursor+1 to recover a
+      # scheduler-coalescing gap, bounded by EVENTS_MAX_LOOKBACK. On PUBLIC RPC that
+      # bound is the prune horizon (gaps wider than it are already pruned — best-effort,
+      # lossy by construction); pointed at the ARCHIVE node (ADR 0012 / #1349) with a
+      # high EVENTS_MAX_LOOKBACK, recovery is COMPLETE. A cold start (no object yet) is
+      # fine: `get` fails, EVENTS_CURSOR stays blank → window floor. `|| true` so a
+      # missing object or transient R2 blip never fails the run.
       - name: Read event cursor from R2
         id: cursor
         run: |
@@ -85,8 +85,13 @@ jobs:
           # run so staged-but-not-yet-loaded event batches can be regenerated if
           # the single pending R2 object is overwritten before the Worker drains it.
           EVENTS_WINDOW: "250"
-          # Highest block already staged; used for lag/health accounting only.
+          # Highest block already staged; the poller resumes from cursor+1 to recover
+          # a coalescing gap (bounded by EVENTS_MAX_LOOKBACK) and uses it for lag/health.
           EVENTS_CURSOR: ${{ steps.cursor.outputs.block }}
+          # Cap on gap recovery. Default (unset) = prune horizon, correct for PUBLIC
+          # RPC. When EVENTS_RPC_URL points at the ARCHIVE node (ADR 0012 / #1349),
+          # raise this (e.g. "1000000") so a long scheduler gap is recovered in full.
+          # EVENTS_MAX_LOOKBACK: "1000000"
           # Emit a ::warning:: (and webhook alert, if configured) when the cursor
           # falls within a window of the public-RPC prune horizon.
           METAGRAPH_ALERT_WEBHOOK_URL: ${{ secrets.METAGRAPH_ALERT_WEBHOOK_URL }}
